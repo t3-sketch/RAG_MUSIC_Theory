@@ -1,0 +1,11 @@
+streamlit>=1.40
+chromadb>=0.5
+sentence-transformers>=3.0
+librosa>=0.10
+soundfile>=0.12
+anthropic>=0.40
+pymupdf>=1.24
+beautifulsoup4>=4.12
+requests>=2.32
+python-dotenv>=1.0
+numpy>=1.26

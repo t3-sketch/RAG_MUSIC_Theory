@@ -1,15 +1,8 @@
 """プロジェクト全体の設定を一元管理するモジュール。"""
 import os
-from pathlib import Path
-
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# --- パス ---
-BASE_DIR = Path(__file__).resolve().parent
-CORPUS_DIR = BASE_DIR / "data" / "corpus"   # 教材（PDF/HTML/txt/md）を置く場所
-CHROMA_DIR = BASE_DIR / "data" / "chroma"   # Chroma の永続化先
 
 # --- ベクトルDB ---
 COLLECTION_NAME = "music_theory"

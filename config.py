@@ -14,6 +14,15 @@ CHROMA_DIR = BASE_DIR / "data" / "chroma"   # Chroma の永続化先
 # --- ベクトルDB ---
 COLLECTION_NAME = "music_theory"
 
+# --- Qdrant（Docker, http://localhost:6333）---
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", COLLECTION_NAME)
+# BGE-M3 の dense ベクトル次元。collection 作成時の次元と必ず一致させる。
+EMBED_DIM = 1024
+# 距離関数（cosine 固定）
+DISTANCE = "cosine"
+
 # --- モデル ---
 EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")

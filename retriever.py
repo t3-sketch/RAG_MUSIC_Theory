@@ -1,4 +1,10 @@
-"""Chroma DB のラッパー。BGE-M3 埋め込み関数を使い、投入と検索の埋め込みを統一する。"""
+"""
+Chroma DB を使ったベクトル検索のラッパー。BGE-M3 埋め込み関数を使用し、投入と検索の埋め込みを統一する。
+- get_collection(): DB取得・ingest/内部で使用
+- count(): BGE-M3モデル初期化。
+- search(query, top_k): 類似検索
+"""
+
 from functools import lru_cache
 
 import chromadb
@@ -27,7 +33,11 @@ def get_collection():
 
 
 def count() -> int:
-    """投入済みチャンク数。"""
+    """
+    登録数確認。app.py のサイドバーで使用。
+    例外が起きたら 0 を返す（未投入 or コレクション破損の可能性）。
+    """
+
     try:
         return get_collection().count()
     except Exception:
@@ -35,7 +45,12 @@ def count() -> int:
 
 
 def search(query: str, top_k: int = config.TOP_K) -> list[dict]:
-    """クエリに近いチャンクを top_k 件返す。"""
+    """
+    クエリに近いチャンクを top_k 件返す。 
+    app.py の質問実行時に使用。返り値はリストで、各要素は 
+    {"text": ..., "meta": ..., "distance": ...} の形式。
+    """
+
     col = get_collection()
     res = col.query(query_texts=[query], n_results=top_k)
     docs = res["documents"][0]

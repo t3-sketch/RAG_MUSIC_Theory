@@ -12,6 +12,16 @@ import config
 import llm
 import retriever
 
+import logging
+from fastapi import FastAPI
+import inngest
+import inngest.fast_api
+from inngest.experimental import ai
+
+# Initialize the FastAPI app
+app = FastAPI()
+app.add_middleware(inngest.fast_api.Middleware)
+
 st.set_page_config(page_title="音楽理論RAG解説", page_icon="🎵", layout="centered")
 st.title("🎵 RAG 楽曲解説")
 st.caption("教材コーパス × 音響解析 × Claude による音楽理論解説（個人用）")
@@ -24,9 +34,10 @@ with st.sidebar:
     if n == 0:
         st.warning("先に `python ingest.py` で教材を投入してください。")
     st.text(f"埋め込み: {config.EMBED_MODEL}")
-    st.text(f"生成: {config.CLAUDE_MODEL}")
-    if not config.ANTHROPIC_API_KEY:
-        st.error("ANTHROPIC_API_KEY が未設定です（.env）。")
+    st.text(f"生成: {config.GEMINI_MODEL}")
+    st.text(f"生成: {config.GEMINI_MODEL}")
+    if not config.GEMINI_API_KEY:
+        st.error("GEMINI_API_KEY が未設定です（.env）。")
 
 # --- 入力 ---
 query = st.text_area(
@@ -59,8 +70,8 @@ if run:
     if not query.strip():
         st.warning("質問を入力してください。")
         st.stop()
-    if not config.ANTHROPIC_API_KEY:
-        st.error("ANTHROPIC_API_KEY が未設定です。")
+    if not config.GEMINI_API_KEY:
+        st.error("GEMINI_API_KEY が未設定です。")
         st.stop()
 
     audio_desc = None

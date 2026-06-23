@@ -1,5 +1,6 @@
-"""Claude API を呼び出して音楽理論解説を生成するモジュール。"""
-from anthropic import Anthropic
+"""Gemini API を呼び出して音楽理論解説を生成するモジュール。"""
+from google import genai
+from google.genai import types
 
 import config
 
@@ -18,8 +19,7 @@ SYSTEM_PROMPT = """あなたは音楽理論と楽曲分析の専門家です。
 
 
 def explain(query: str, chunks: list[dict], audio_desc: str | None = None) -> str:
-    """検索したチャンクと（あれば）音響特徴を元に解説を生成する。"""
-    client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
 
     context = "\n\n---\n\n".join(
         f"[出典: {c['meta'].get('source', '?')}]\n{c['text']}" for c in chunks
@@ -29,12 +29,12 @@ def explain(query: str, chunks: list[dict], audio_desc: str | None = None) -> st
     if audio_desc:
         parts.append(f"# 解析した楽曲の音響特徴\n{audio_desc}")
     parts.append(f"# 質問\n{query}")
-    user_content = "\n\n".join(parts)
 
-    resp = client.messages.create(
-        model=config.CLAUDE_MODEL,
-        max_tokens=config.MAX_TOKENS,
-        system=SYSTEM_PROMPT.format(context=context),
-        messages=[{"role": "user", "content": user_content}],
+    resp = client.models.generate_content(
+        model=config.GEMINI_MODEL,
+        contents="\n\n".join(parts),
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT.format(context=context),
+        ),
     )
-    return "".join(b.text for b in resp.content if b.type == "text")
+    return resp.text

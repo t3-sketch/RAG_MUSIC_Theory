@@ -1,0 +1,1306 @@
+...
+
+Format: HTML
+max tokens
+50000
+
+All Extensions
+
+Base path: root
+t3-sketch
+@t3-sketch
+~9179 tokens
+
+
+Copy page
+├── .DS_Store
+├── requirements.txt
+├── env.example
+├── config.py (200 tokens)
+├── llm.py (300 tokens)
+├── retriever.py (300 tokens)
+├── README.md (700 tokens)
+├── app.py (800 tokens)
+├── audio.py (1500 tokens)
+├── ingest.py (2500 tokens)
+└── ingest copy.py (2500 tokens)
+
+
+/.DS_Store:
+--------------------------------------------------------------------------------
+https://raw.githubusercontent.com/t3-sketch/RAG_MUSIC_Theory/HEAD/.DS_Store
+
+
+--------------------------------------------------------------------------------
+/requirements.txt:
+--------------------------------------------------------------------------------
+ 1 | streamlit>=1.40
+ 2 | chromadb>=0.5
+ 3 | sentence-transformers>=3.0
+ 4 | librosa>=0.10
+ 5 | soundfile>=0.12
+ 6 | anthropic>=0.40
+ 7 | pymupdf>=1.24
+ 8 | beautifulsoup4>=4.12
+ 9 | requests>=2.32
+10 | python-dotenv>=1.0
+11 | numpy>=1.26
+12 | 
+
+
+--------------------------------------------------------------------------------
+/env.example:
+--------------------------------------------------------------------------------
+ 1 | # Anthropic API（必須）
+ 2 | ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
+ 3 | 
+ 4 | # 使用する Claude モデル（任意・デフォルトは claude-sonnet-4-6）
+ 5 | # 高品質重視なら claude-opus-4-8 / 低コスト重視なら claude-haiku-4-5-20251001
+ 6 | CLAUDE_MODEL=claude-sonnet-4-6
+ 7 | 
+ 8 | # 埋め込みモデル（任意・デフォルトは BGE-M3）
+ 9 | EMBED_MODEL=BAAI/bge-m3
+10 | 
+11 | # Songle API トークン（任意・Songle を使う場合のみ）
+12 | SONGLE_API_TOKEN=
+13 | 
+
+
+--------------------------------------------------------------------------------
+/config.py:
+--------------------------------------------------------------------------------
+ 1 | """プロジェクト全体の設定を一元管理するモジュール。"""
+ 2 | import os
+ 3 | from pathlib import Path
+ 4 | 
+ 5 | from dotenv import load_dotenv
+ 6 | 
+ 7 | load_dotenv()
+ 8 | 
+ 9 | # --- パス ---
+10 | BASE_DIR = Path(__file__).parent
+11 | CORPUS_DIR = BASE_DIR / "data" / "corpus"   # 教材（PDF/HTML/txt/md）を置く場所
+12 | CHROMA_DIR = BASE_DIR / "data" / "chroma"   # Chroma の永続化先
+13 | 
+14 | # --- ベクトルDB ---
+15 | COLLECTION_NAME = "music_theory"
+16 | 
+17 | # --- モデル ---
+18 | EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
+19 | CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+20 | ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+21 | 
+22 | # --- Songle API ---
+23 | SONGLE_API_TOKEN = os.getenv("SONGLE_API_TOKEN", "")
+24 | # 注意: ベースURLと認証方式は取得済みトークンのダッシュボードで要確認。
+25 | # 必要に応じてここを書き換えてください。
+26 | SONGLE_API_BASE = "https://widget.songle.jp/api/v1"
+27 | 
+28 | # --- チャンク分割（文字数ベース。日本語教材を想定）---
+29 | CHUNK_CHARS = 800
+30 | CHUNK_OVERLAP = 120
+31 | 
+32 | # --- 検索・生成 ---
+33 | TOP_K = 5
+34 | MAX_TOKENS = 1500
+35 | 
+
+
+--------------------------------------------------------------------------------
+/llm.py:
+--------------------------------------------------------------------------------
+ 1 | """Claude API を呼び出して音楽理論解説を生成するモジュール。"""
+ 2 | from anthropic import Anthropic
+ 3 | 
+ 4 | import config
+ 5 | 
+ 6 | SYSTEM_PROMPT = """あなたは音楽理論と楽曲分析の専門家です。
+ 7 | 以下の参考資料（音楽理論教材からの抜粋）を根拠に、ユーザーの質問へ日本語で丁寧かつ具体的に答えてください。
+ 8 | 
+ 9 | ルール:
+10 | - 参考資料に書かれている内容を優先して使うこと。
+11 | - 参考資料に無い内容を補う場合は「(資料外の一般知識)」と明示すること。
+12 | - 楽曲の音響特徴が与えられている場合は、それを資料の理論と結びつけて解説すること。
+13 | - コード進行やキーに言及するときは、機能（トニック/サブドミナント/ドミナント等）にも触れること。
+14 | 
+15 | [参考資料]
+16 | {context}
+17 | """
+18 | 
+19 | 
+20 | def explain(query: str, chunks: list[dict], audio_desc: str | None = None) -> str:
+21 |     """検索したチャンクと（あれば）音響特徴を元に解説を生成する。"""
+22 |     client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+23 | 
+24 |     context = "\n\n---\n\n".join(
+25 |         f"[出典: {c['meta'].get('source', '?')}]\n{c['text']}" for c in chunks
+26 |     ) or "(参考資料が見つかりませんでした)"
+27 | 
+28 |     parts = []
+29 |     if audio_desc:
+30 |         parts.append(f"# 解析した楽曲の音響特徴\n{audio_desc}")
+31 |     parts.append(f"# 質問\n{query}")
+32 |     user_content = "\n\n".join(parts)
+33 | 
+34 |     resp = client.messages.create(
+35 |         model=config.CLAUDE_MODEL,
+36 |         max_tokens=config.MAX_TOKENS,
+37 |         system=SYSTEM_PROMPT.format(context=context),
+38 |         messages=[{"role": "user", "content": user_content}],
+39 |     )
+40 |     return "".join(b.text for b in resp.content if b.type == "text")
+41 | 
+
+
+--------------------------------------------------------------------------------
+/retriever.py:
+--------------------------------------------------------------------------------
+ 1 | """Chroma DB のラッパー。BGE-M3 埋め込み関数を使い、投入と検索の埋め込みを統一する。"""
+ 2 | from functools import lru_cache
+ 3 | 
+ 4 | import chromadb
+ 5 | from chromadb.utils import embedding_functions
+ 6 | 
+ 7 | import config
+ 8 | 
+ 9 | 
+10 | @lru_cache(maxsize=1)
+11 | def _embed_fn():
+12 |     # 初回呼び出し時に BGE-M3（約2GB）をダウンロードする。
+13 |     return embedding_functions.SentenceTransformerEmbeddingFunction(
+14 |         model_name=config.EMBED_MODEL
+15 |     )
+16 | 
+17 | 
+18 | @lru_cache(maxsize=1)
+19 | def get_collection():
+20 |     """コレクションを取得（なければ作成）。cosine 距離で固定。"""
+21 |     client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
+22 |     return client.get_or_create_collection(
+23 |         name=config.COLLECTION_NAME,
+24 |         embedding_function=_embed_fn(),
+25 |         metadata={"hnsw:space": "cosine"},
+26 |     )
+27 | 
+28 | 
+29 | def count() -> int:
+30 |     """投入済みチャンク数。"""
+31 |     try:
+32 |         return get_collection().count()
+33 |     except Exception:
+34 |         return 0
+35 | 
+36 | 
+37 | def search(query: str, top_k: int = config.TOP_K) -> list[dict]:
+38 |     """クエリに近いチャンクを top_k 件返す。"""
+39 |     col = get_collection()
+40 |     res = col.query(query_texts=[query], n_results=top_k)
+41 |     docs = res["documents"][0]
+42 |     metas = res["metadatas"][0]
+43 |     dists = res["distances"][0]
+44 |     return [
+45 |         {"text": d, "meta": m, "distance": dist}
+46 |         for d, m, dist in zip(docs, metas, dists)
+47 |     ]
+48 | 
+
+
+--------------------------------------------------------------------------------
+/README.md:
+--------------------------------------------------------------------------------
+  1 | # 🎵 music-rag — RAG 楽曲解説システム
+  2 | 
+  3 | 音楽理論教材を知識ベースにした **RAG（検索拡張生成）** で、楽曲についての質問に音楽理論の観点から答えるローカルアプリ。
+  4 | ローカル音源（Librosa）または web 上の楽曲（Songle API）の音響特徴を解析し、教材の理論と結びつけて Claude が日本語で解説する。
+  5 | 
+  6 | > 個人利用を前提とした最小構成。Python ワンスタック（Streamlit）で、サーバー不要。
+  7 | 
+  8 | ---
+  9 | 
+ 10 | ## ✨ 特徴
+ 11 | 
+ 12 | - **教材ベースの解説** — 投入した教材（SoundQuest / musicplanz など）を根拠に回答。資料外の知識は明示。
+ 13 | - **2系統の音響解析**
+ 14 |   - ローカルファイル（mp3/wav/flac）→ Librosa で BPM・キー・音色を推定
+ 15 |   - web 上の楽曲 URL → Songle API（産総研）で **実際のコード進行・ビート・サビ構造** を取得
+ 16 | - **透明性** — 回答に使った教材チャンクの出典と、解析した音響特徴を画面で確認できる。
+ 17 | - **ローカル完結** — Chroma DB はローカル永続化。外部公開なし。
+ 18 | 
+ 19 | ---
+ 20 | 
+ 21 | ## 🧭 パイプライン
+ 22 | 
+ 23 | ```
+ 24 | 質問テキスト ─┐
+ 25 |               ├─→ クエリ統合 → BGE-M3 埋め込み → Chroma 検索(top-k) ─┐
+ 26 | 音源(任意) ───┘                                                      ├─→ Claude API → 解説テキスト
+ 27 |    ├ ローカル → Librosa(BPM/Key/音色)                                │
+ 28 |    └ URL     → Songle(コード進行/ビート/構造) ──→ 音響特徴をテキスト化 ┘
+ 29 |                                                   教材コーパス(事前にChromaへ投入)
+ 30 | ```
+ 31 | 
+ 32 | ---
+ 33 | 
+ 34 | ## 🛠 必要環境
+ 35 | 
+ 36 | - Python 3.10+
+ 37 | - `ffmpeg`（mp3 をローカル解析する場合に推奨）
+ 38 | - Anthropic API キー
+ 39 | - （任意）Songle API トークン
+ 40 | 
+ 41 | ---
+ 42 | 
+ 43 | ## 🚀 セットアップ
+ 44 | 
+ 45 | ```bash
+ 46 | # 1. 依存をインストール
+ 47 | pip install -r requirements.txt
+ 48 | 
+ 49 | # 2. 環境変数を設定
+ 50 | cp .env.example .env
+ 51 | #   .env を編集し、ANTHROPIC_API_KEY を入れる
+ 52 | 
+ 53 | # 3. 教材を置く（PDF / HTML / txt / md に対応）
+ 54 | #   data/corpus/ 以下に配置
+ 55 | 
+ 56 | # 4. 教材を Chroma に投入（1回だけ。初回は BGE-M3 を自動DL ≈2GB）
+ 57 | python ingest.py
+ 58 | 
+ 59 | # 5. アプリ起動
+ 60 | streamlit run app.py
+ 61 | ```
+ 62 | 
+ 63 | ---
+ 64 | 
+ 65 | ## 📖 使い方
+ 66 | 
+ 67 | 1. ブラウザで開いたアプリに質問を入力。
+ 68 | 2. 必要なら音源を指定：
+ 69 |    - **ローカルファイル**：自分の制作中の曲などをアップロード（Librosa 解析）
+ 70 |    - **Songle (URL)**：YouTube / ニコニコ等の URL を入力（Songle で解析済みの曲）
+ 71 | 3. 「解説を生成」をクリック。
+ 72 | 4. 解説本文・参照した教材チャンク・音響特徴が表示される。
+ 73 | 
+ 74 | ---
+ 75 | 
+ 76 | ## 📁 構成
+ 77 | 
+ 78 | ```
+ 79 | music-rag/
+ 80 | ├── app.py            # Streamlit UI 本体
+ 81 | ├── ingest.py         # 教材投入スクリプト（1回実行）
+ 82 | ├── retriever.py      # Chroma + BGE-M3 ラッパー（検索）
+ 83 | ├── audio.py          # Librosa(ローカル) / Songle(URL) 音響解析
+ 84 | ├── llm.py            # Claude API 呼び出し
+ 85 | ├── config.py         # 設定の一元管理
+ 86 | ├── requirements.txt
+ 87 | ├── .env.example
+ 88 | └── data/
+ 89 |     ├── corpus/       # ここに教材を置く
+ 90 |     └── chroma/       # Chroma の永続化先（自動生成）
+ 91 | ```
+ 92 | 
+ 93 | ---
+ 94 | 
+ 95 | ## ⚠️ 注意
+ 96 | 
+ 97 | - **Songle**：対象 URL が Songle 側で **事前解析済み** である必要がある。未解析なら songle.jp で解析申請を。
+ 98 |   REST のベース URL と認証方式は取得済みトークンのダッシュボードで確認し、必要に応じて `config.py` の `SONGLE_API_BASE` を調整すること。Songle は産総研（後藤真孝氏ら）の音楽理解技術による解析結果を提供するサービス。利用時はクレジット表記の規約を確認。
+ 99 | - **教材の著作権**：本構成は個人学習用途を前提とする。第三者への公開・配布を行う場合は教材の利用許諾を別途確認すること。
+100 | - **キー/BPM 推定**：Librosa 経路は信号からの統計的推定で誤差を含む。正確なコード進行が必要なら Songle 経路を使う。
+101 | - **初回実行**：BGE-M3（約2GB）のダウンロードが走るため、最初の `ingest.py` は時間がかかる。
+102 | 
+103 | ---
+104 | 
+105 | ## 🔧 設定（config.py / .env）
+106 | 
+107 | | 項目 | 既定値 | 説明 |
+108 | |---|---|---|
+109 | | `CLAUDE_MODEL` | `claude-sonnet-4-6` | 生成モデル。高品質なら `claude-opus-4-8`、低コストなら `claude-haiku-4-5-20251001` |
+110 | | `EMBED_MODEL` | `BAAI/bge-m3` | 多言語埋め込みモデル |
+111 | | `CHUNK_CHARS` | `800` | チャンクの文字数 |
+112 | | `TOP_K` | `5` | 検索で取得するチャンク数 |
+113 | 
+
+
+--------------------------------------------------------------------------------
+/app.py:
+--------------------------------------------------------------------------------
+  1 | """Streamlit アプリ本体。
+  2 | 
+  3 |     streamlit run app.py
+  4 | """
+  5 | import tempfile
+  6 | from pathlib import Path
+  7 | 
+  8 | import streamlit as st
+  9 | 
+ 10 | import audio
+ 11 | import config
+ 12 | import llm
+ 13 | import retriever
+ 14 | 
+ 15 | st.set_page_config(page_title="音楽理論RAG解説", page_icon="🎵", layout="centered")
+ 16 | st.title("🎵 RAG 楽曲解説")
+ 17 | st.caption("教材コーパス × 音響解析 × Claude による音楽理論解説（個人用）")
+ 18 | 
+ 19 | # --- サイドバー ---
+ 20 | with st.sidebar:
+ 21 |     st.subheader("状態")
+ 22 |     n = retriever.count()
+ 23 |     st.metric("投入済みチャンク数", n)
+ 24 |     if n == 0:
+ 25 |         st.warning("先に `python ingest.py` で教材を投入してください。")
+ 26 |     st.text(f"埋め込み: {config.EMBED_MODEL}")
+ 27 |     st.text(f"生成: {config.CLAUDE_MODEL}")
+ 28 |     if not config.ANTHROPIC_API_KEY:
+ 29 |         st.error("ANTHROPIC_API_KEY が未設定です（.env）。")
+ 30 | 
+ 31 | # --- 入力 ---
+ 32 | query = st.text_area(
+ 33 |     "質問",
+ 34 |     placeholder="例: この曲のコード進行はなぜ切なく聞こえる? Kawaii Future Bass によくある進行と比べて説明して。",
+ 35 |     height=100,
+ 36 | )
+ 37 | 
+ 38 | st.markdown("##### 音響解析（任意）")
+ 39 | mode = st.radio(
+ 40 |     "音源の指定方法",
+ 41 |     ["なし", "ローカルファイル", "Songle (URL)"],
+ 42 |     horizontal=True,
+ 43 |     label_visibility="collapsed",
+ 44 | )
+ 45 | 
+ 46 | uploaded = None
+ 47 | songle_url = ""
+ 48 | if mode == "ローカルファイル":
+ 49 |     uploaded = st.file_uploader("音声ファイル", type=["mp3", "wav", "flac"])
+ 50 | elif mode == "Songle (URL)":
+ 51 |     songle_url = st.text_input(
+ 52 |         "楽曲URL（YouTube / ニコニコ / SoundCloud など、Songle解析済みのもの）"
+ 53 |     )
+ 54 | 
+ 55 | run = st.button("解説を生成", type="primary")
+ 56 | 
+ 57 | # --- 実行 ---
+ 58 | if run:
+ 59 |     if not query.strip():
+ 60 |         st.warning("質問を入力してください。")
+ 61 |         st.stop()
+ 62 |     if not config.ANTHROPIC_API_KEY:
+ 63 |         st.error("ANTHROPIC_API_KEY が未設定です。")
+ 64 |         st.stop()
+ 65 | 
+ 66 |     audio_desc = None
+ 67 | 
+ 68 |     # 1) 音響解析
+ 69 |     if mode == "ローカルファイル" and uploaded is not None:
+ 70 |         with st.spinner("Librosa で音源を解析中..."):
+ 71 |             suffix = Path(uploaded.name).suffix
+ 72 |             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+ 73 |                 tmp.write(uploaded.getbuffer())
+ 74 |                 tmp_path = tmp.name
+ 75 |             try:
+ 76 |                 feats = audio.extract_local(tmp_path)
+ 77 |                 audio_desc = audio.describe_local(feats)
+ 78 |             except Exception as e:
+ 79 |                 st.error(f"音源解析に失敗しました: {e}")
+ 80 |     elif mode == "Songle (URL)" and songle_url.strip():
+ 81 |         with st.spinner("Songle API から解析結果を取得中..."):
+ 82 |             try:
+ 83 |                 data = audio.fetch_songle(songle_url.strip())
+ 84 |                 audio_desc = audio.describe_songle(data)
+ 85 |             except Exception as e:
+ 86 |                 st.error(f"Songle 取得に失敗しました（未解析のURLの可能性）: {e}")
+ 87 | 
+ 88 |     # 2) 検索
+ 89 |     with st.spinner("教材を検索中..."):
+ 90 |         try:
+ 91 |             chunks = retriever.search(query)
+ 92 |         except Exception as e:
+ 93 |             st.error(f"検索に失敗しました: {e}")
+ 94 |             st.stop()
+ 95 | 
+ 96 |     # 3) 生成
+ 97 |     with st.spinner("Claude が解説を生成中..."):
+ 98 |         try:
+ 99 |             answer = llm.explain(query, chunks, audio_desc)
+100 |         except Exception as e:
+101 |             st.error(f"生成に失敗しました: {e}")
+102 |             st.stop()
+103 | 
+104 |     # --- 出力 ---
+105 |     st.markdown("### 解説")
+106 |     st.markdown(answer)
+107 | 
+108 |     if audio_desc:
+109 |         with st.expander("解析した音響特徴"):
+110 |             st.text(audio_desc)
+111 | 
+112 |     with st.expander(f"参照した教材チャンク（{len(chunks)}件）"):
+113 |         for i, c in enumerate(chunks, 1):
+114 |             st.markdown(
+115 |                 f"**{i}. {c['meta'].get('source', '?')}** "
+116 |                 f"(distance={c['distance']:.3f})"
+117 |             )
+118 |             st.text(c["text"][:400] + ("…" if len(c["text"]) > 400 else ""))
+119 | 
+
+
+--------------------------------------------------------------------------------
+/audio.py:
+--------------------------------------------------------------------------------
+  1 | """音響解析モジュール。
+  2 | 
+  3 | 2系統の入力をサポートする:
+  4 |   1. ローカル音声ファイル（mp3/wav/flac）  -> Librosa で特徴抽出
+  5 |   2. web上の楽曲URL（YouTube/ニコニコ等）  -> Songle API で解析結果を取得
+  6 | 
+  7 | どちらも最終的に「Claude に渡す日本語テキスト」へ変換する。
+  8 | """
+  9 | from __future__ import annotations
+ 10 | 
+ 11 | import numpy as np
+ 12 | import requests
+ 13 | 
+ 14 | import config
+ 15 | 
+ 16 | # --- 音名・調推定用プロファイル（Krumhansl-Schmuckler）---
+ 17 | PITCHES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+ 18 | _KS_MAJOR = np.array(
+ 19 |     [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+ 20 | )
+ 21 | _KS_MINOR = np.array(
+ 22 |     [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+ 23 | )
+ 24 | 
+ 25 | 
+ 26 | # =========================================================
+ 27 | #  1. ローカルファイル: Librosa
+ 28 | # =========================================================
+ 29 | def extract_local(path: str) -> dict:
+ 30 |     """ローカル音声ファイルから音響特徴を抽出する。"""
+ 31 |     import librosa  # 重いので関数内 import
+ 32 | 
+ 33 |     y, sr = librosa.load(path, sr=22050, mono=True)
+ 34 | 
+ 35 |     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+ 36 |     tempo = float(np.atleast_1d(tempo)[0])
+ 37 | 
+ 38 |     chroma = librosa.feature.chroma_cens(y=y, sr=sr).mean(axis=1)
+ 39 |     key = _estimate_key(chroma)
+ 40 | 
+ 41 |     centroid = float(librosa.feature.spectral_centroid(y=y, sr=sr).mean())
+ 42 |     rms = float(librosa.feature.rms(y=y).mean())
+ 43 |     zcr = float(librosa.feature.zero_crossing_rate(y).mean())
+ 44 | 
+ 45 |     return {
+ 46 |         "bpm": round(tempo, 1),
+ 47 |         "key": key,
+ 48 |         "brightness_hz": round(centroid, 0),
+ 49 |         "energy_rms": round(rms, 4),
+ 50 |         "zcr": round(zcr, 4),
+ 51 |         "duration_sec": round(len(y) / sr, 1),
+ 52 |     }
+ 53 | 
+ 54 | 
+ 55 | def _estimate_key(chroma_mean: np.ndarray) -> str:
+ 56 |     """12次元クロマから最も相関の高い調（major/minor）を返す。"""
+ 57 |     best_name, best_score = "不明", -2.0
+ 58 |     for i in range(12):
+ 59 |         for profile, mode in ((_KS_MAJOR, "major"), (_KS_MINOR, "minor")):
+ 60 |             rolled = np.roll(profile, i)
+ 61 |             score = float(np.corrcoef(rolled, chroma_mean)[0, 1])
+ 62 |             if score > best_score:
+ 63 |                 best_score = score
+ 64 |                 best_name = f"{PITCHES[i]} {mode}"
+ 65 |     return best_name
+ 66 | 
+ 67 | 
+ 68 | def describe_local(f: dict) -> str:
+ 69 |     """Librosa の特徴を日本語の説明テキストにする。"""
+ 70 |     brightness = "明るい" if f["brightness_hz"] > 2500 else "落ち着いた"
+ 71 |     energy = "強い" if f["energy_rms"] > 0.05 else "穏やか"
+ 72 |     return (
+ 73 |         f"- 解析方法: Librosa（ローカル音源の信号解析）\n"
+ 74 |         f"- 推定BPM: {f['bpm']}\n"
+ 75 |         f"- 推定キー: {f['key']}\n"
+ 76 |         f"- 長さ: {f['duration_sec']} 秒\n"
+ 77 |         f"- 音色の明るさ: {brightness}（スペクトル重心 {f['brightness_hz']:.0f} Hz）\n"
+ 78 |         f"- エネルギー感: {energy}（RMS {f['energy_rms']}）\n"
+ 79 |         f"- ノイズ/打楽器成分の目安: ZCR {f['zcr']}\n"
+ 80 |         f"※ キーとBPMは信号からの統計的推定であり、誤差を含む。"
+ 81 |     )
+ 82 | 
+ 83 | 
+ 84 | # =========================================================
+ 85 | #  2. web上の楽曲URL: Songle API（産総研）
+ 86 | # =========================================================
+ 87 | def fetch_songle(url: str) -> dict:
+ 88 |     """Songle から楽曲解析結果（基本情報・コード・ビート・サビ構造）を取得する。
+ 89 | 
+ 90 |     対象URLが Songle 側で事前解析済みである必要がある。
+ 91 |     未解析の場合は songle.jp 上で解析申請しておくこと。
+ 92 |     """
+ 93 |     params = {"url": url}
+ 94 |     headers = {}
+ 95 |     if config.SONGLE_API_TOKEN:
+ 96 |         # 認証方式はダッシュボードで要確認（ヘッダ or クエリ）。
+ 97 |         headers["X-Songle-Api-Token"] = config.SONGLE_API_TOKEN
+ 98 | 
+ 99 |     def _get(endpoint: str):
+100 |         r = requests.get(
+101 |             f"{config.SONGLE_API_BASE}/{endpoint}",
+102 |             params=params,
+103 |             headers=headers,
+104 |             timeout=20,
+105 |         )
+106 |         r.raise_for_status()
+107 |         return r.json()
+108 | 
+109 |     song = _get("song")
+110 |     chords = _list(_get("song/chord"), "chords")
+111 |     beats = _list(_get("song/beat"), "beats")
+112 |     chorus = _list(_get("song/chorus"), "chorusSegments")
+113 | 
+114 |     return {
+115 |         "title": _dig(song, "title") or "（不明）",
+116 |         "artist": _dig(song, "artist", "name") or "（不明）",
+117 |         "duration_sec": round((_dig(song, "duration") or 0) / 1000, 1),
+118 |         "bpm": _bpm_from_beats(beats),
+119 |         "chord_progression": _chord_progression(chords),
+120 |         "unique_chords": _unique_chords(chords),
+121 |         "n_chorus": len(chorus),
+122 |     }
+123 | 
+124 | 
+125 | def _list(data, key: str) -> list:
+126 |     """レスポンスの形ゆれを吸収して目的のリストを取り出す。"""
+127 |     if isinstance(data, list):
+128 |         return data
+129 |     if isinstance(data, dict):
+130 |         if key in data and isinstance(data[key], list):
+131 |             return data[key]
+132 |         for v in data.values():
+133 |             if isinstance(v, dict) and key in v and isinstance(v[key], list):
+134 |                 return v[key]
+135 |             if isinstance(v, list):
+136 |                 return v
+137 |     return []
+138 | 
+139 | 
+140 | def _dig(data, *keys):
+141 |     cur = data
+142 |     for k in keys:
+143 |         if not isinstance(cur, dict):
+144 |             return None
+145 |         cur = cur.get(k)
+146 |     return cur
+147 | 
+148 | 
+149 | def _bpm_from_beats(beats: list) -> float | None:
+150 |     """連続する拍の間隔の中央値から BPM を推定する。"""
+151 |     starts = [b.get("start") for b in beats if isinstance(b, dict) and "start" in b]
+152 |     starts = sorted(s for s in starts if s is not None)
+153 |     if len(starts) < 2:
+154 |         return None
+155 |     diffs = np.diff(starts)
+156 |     median = float(np.median(diffs))
+157 |     if median <= 0:
+158 |         return None
+159 |     # start がミリ秒で来る場合（間隔が大きい）は秒に換算
+160 |     interval_sec = median / 1000 if median > 10 else median
+161 |     return round(60.0 / interval_sec, 1)
+162 | 
+163 | 
+164 | def _chord_progression(chords: list, limit: int = 24) -> list[str]:
+165 |     """連続する同名コードをまとめてコード進行のシーケンスにする。"""
+166 |     names = [c.get("name") for c in chords if isinstance(c, dict) and c.get("name")]
+167 |     seq, prev = [], None
+168 |     for name in names:
+169 |         if name != prev:
+170 |             seq.append(name)
+171 |             prev = name
+172 |     return seq[:limit]
+173 | 
+174 | 
+175 | def _unique_chords(chords: list) -> list[str]:
+176 |     seen = []
+177 |     for c in chords:
+178 |         name = c.get("name") if isinstance(c, dict) else None
+179 |         if name and name not in seen:
+180 |             seen.append(name)
+181 |     return seen
+182 | 
+183 | 
+184 | def describe_songle(d: dict) -> str:
+185 |     """Songle の解析結果を日本語の説明テキストにする。"""
+186 |     prog = " → ".join(d["chord_progression"]) if d["chord_progression"] else "（取得なし）"
+187 |     uniq = ", ".join(d["unique_chords"]) if d["unique_chords"] else "（取得なし）"
+188 |     bpm = d["bpm"] if d["bpm"] is not None else "（取得なし）"
+189 |     return (
+190 |         f"- 解析方法: Songle API（産総研の音楽理解技術による解析結果）\n"
+191 |         f"- 曲名 / アーティスト: {d['title']} / {d['artist']}\n"
+192 |         f"- 長さ: {d['duration_sec']} 秒\n"
+193 |         f"- 推定BPM: {bpm}\n"
+194 |         f"- コード進行（冒頭）: {prog}\n"
+195 |         f"- 使用コード一覧: {uniq}\n"
+196 |         f"- サビ（繰り返し区間）の数: {d['n_chorus']}"
+197 |     )
+198 | 
+
+
+--------------------------------------------------------------------------------
+/ingest.py:
+--------------------------------------------------------------------------------
+  1 | """教材コーパスを Chroma に投入するスクリプト（1回だけ実行すればよい）。
+  2 | 
+  3 | 使い方:
+  4 |     # ローカルファイル（PDF/HTML/txt/md）を data/corpus/ に置いて一括投入
+  5 |     python ingest.py
+  6 | 
+  7 |     # SoundQuest の URL を直接スクレイプして投入
+  8 |     python ingest.py --url https://soundquest.jp/quest/prerequisite/tonality/
+  9 | 
+ 10 |     # URL リストファイル（1行1URL）を一括スクレイプ
+ 11 |     python ingest.py --url-file urls.txt
+ 12 | 
+ 13 | upsert なので何度実行しても重複しない（冪等）。
+ 14 | """
+ 15 | from __future__ import annotations
+ 16 | 
+ 17 | import argparse
+ 18 | import sys
+ 19 | import time
+ 20 | from pathlib import Path
+ 21 | 
+ 22 | import fitz  # PyMuPDF
+ 23 | import requests
+ 24 | from bs4 import BeautifulSoup
+ 25 | 
+ 26 | import config
+ 27 | from retriever import get_collection
+ 28 | 
+ 29 | SUPPORTED = {".pdf", ".html", ".htm", ".txt", ".md", ".markdown"}
+ 30 | 
+ 31 | HEADERS = {
+ 32 |     "User-Agent": (
+ 33 |         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+ 34 |         "AppleWebKit/537.36 (KHTML, like Gecko) "
+ 35 |         "Chrome/124.0.0.0 Safari/537.36"
+ 36 |     )
+ 37 | }
+ 38 | 
+ 39 | 
+ 40 | # ── ローカルファイル処理 ─────────────────────────────────────────────────────
+ 41 | 
+ 42 | def extract_text_file(path: Path) -> str:
+ 43 |     """ローカルファイル形式に応じてプレーンテキストを抽出する。"""
+ 44 |     suffix = path.suffix.lower()
+ 45 |     if suffix == ".pdf":
+ 46 |         with fitz.open(path) as doc:
+ 47 |             return "\n".join(page.get_text() for page in doc)
+ 48 |     if suffix in {".html", ".htm"}:
+ 49 |         html = path.read_text(encoding="utf-8", errors="ignore")
+ 50 |         return _html_to_text(html)
+ 51 |     return path.read_text(encoding="utf-8", errors="ignore")
+ 52 | 
+ 53 | 
+ 54 | # ── SoundQuest スクレイパー ───────────────────────────────────────────────────
+ 55 | 
+ 56 | def scrape_soundquest(url: str) -> list[dict]:
+ 57 |     """SoundQuest の1記事（複数ページ対応）をスクレイプし、チャンク候補リストを返す。
+ 58 | 
+ 59 |     各エントリ:
+ 60 |       {"text": str, "type": "text"|"audio"|"image", "source_url": str}
+ 61 |     """
+ 62 |     entries: list[dict] = []
+ 63 |     current_url: str | None = url
+ 64 | 
+ 65 |     while current_url:
+ 66 |         print(f"    fetch: {current_url}")
+ 67 |         resp = requests.get(current_url, headers=HEADERS, timeout=20)
+ 68 |         resp.raise_for_status()
+ 69 |         soup = BeautifulSoup(resp.text, "html.parser")
+ 70 | 
+ 71 |         # 本文エリアを特定
+ 72 |         content = soup.select_one("div.post-content")
+ 73 |         if not content:
+ 74 |             print(f"    warn: .post-content が見つかりません ({current_url})")
+ 75 |             break
+ 76 | 
+ 77 |         # ノイズを除去
+ 78 |         for tag in content.select(
+ 79 |             "script, style, nav, .ez-toc-container, .post-tags, "
+ 80 |             ".post-nav-links, .easy-footnote"
+ 81 |         ):
+ 82 |             tag.decompose()
+ 83 | 
+ 84 |         # コンテンツをブロック単位で走査して種別付きエントリを生成
+ 85 |         entries += _parse_content_blocks(content, current_url)
+ 86 | 
+ 87 |         # 次ページリンクを探す（例: /tonality/2/）
+ 88 |         current_url = _find_next_page(soup, current_url)
+ 89 |         if current_url:
+ 90 |             time.sleep(0.5)  # サーバー負荷軽減
+ 91 | 
+ 92 |     return entries
+ 93 | 
+ 94 | 
+ 95 | def _parse_content_blocks(content, page_url: str) -> list[dict]:
+ 96 |     """本文 DOM を走査し、テキスト・音声・画像を種別付きで抽出する。"""
+ 97 |     entries: list[dict] = []
+ 98 | 
+ 99 |     for elem in content.children:
+100 |         if not hasattr(elem, "name") or not elem.name:
+101 |             continue
+102 | 
+103 |         # ── テキストブロック（p, h2-h5, dl, blockquote, ul, ol など）──
+104 |         if elem.name in {"p", "h2", "h3", "h4", "h5", "dl", "blockquote", "ul", "ol"}:
+105 |             text = _clean_text(elem.get_text(separator=" "))
+106 |             if text:
+107 |                 entries.append({"text": text, "type": "text", "source_url": page_url})
+108 | 
+109 |         # ── .image ブロック（画像 + 直後の音声プレーヤーを一体で処理）──
+110 |         elif "image" in elem.get("class", []):
+111 |             block_text = _extract_image_block(elem)
+112 |             if block_text:
+113 |                 entries.append({"text": block_text, "type": "image", "source_url": page_url})
+114 | 
+115 |         # ── 単体の audio（.image の外に置かれているもの）──
+116 |         elif elem.name == "audio" or elem.select("audio"):
+117 |             audio_text = _extract_audio_text(elem, surrounding="")
+118 |             if audio_text:
+119 |                 entries.append({"text": audio_text, "type": "audio", "source_url": page_url})
+120 | 
+121 |         # ── Spotify 埋め込み ──
+122 |         elif elem.name == "div" and "sp-playlist" in elem.get("class", []):
+123 |             iframe = elem.select_one("iframe[src*='open.spotify.com']")
+124 |             if iframe:
+125 |                 src = iframe.get("src", "")
+126 |                 entries.append({
+127 |                     "text": f"[Spotify プレイリスト埋め込み] URL: {src}",
+128 |                     "type": "text",
+129 |                     "source_url": page_url,
+130 |                 })
+131 | 
+132 |         # ── .def（用語定義ボックス）──
+133 |         elif elem.name == "dl" and "def" in elem.get("class", []):
+134 |             text = _clean_text(elem.get_text(separator=" "))
+135 |             if text:
+136 |                 entries.append({"text": f"[用語定義] {text}", "type": "text", "source_url": page_url})
+137 | 
+138 |     return entries
+139 | 
+140 | 
+141 | def _extract_image_block(elem) -> str:
+142 |     """
+143 |     .image ブロックから、画像の alt テキストと
+144 |     直後に埋め込まれた <audio> の MP3 URL を合成してテキスト化する。
+145 |     """
+146 |     parts: list[str] = []
+147 | 
+148 |     # imgcaption
+149 |     caption_el = elem.select_one(".imgcaption")
+150 |     if caption_el:
+151 |         cap = _clean_text(caption_el.get_text())
+152 |         if cap:
+153 |             parts.append(f"[図のキャプション] {cap}")
+154 | 
+155 |     # img alt
+156 |     for img in elem.select("img"):
+157 |         alt = img.get("alt", "").strip()
+158 |         src = img.get("src", "")
+159 |         if alt:
+160 |             parts.append(f"[画像の説明] {alt}")
+161 |         if src:
+162 |             parts.append(f"[画像URL] {src}")
+163 | 
+164 |     # 直後にある audio → MP3 URL + 周辺テキスト
+165 |     audio = elem.select_one("audio.wp-audio-shortcode")
+166 |     if audio:
+167 |         surrounding = " ".join(p.strip() for p in parts)
+168 |         parts.append(_extract_audio_text(audio, surrounding))
+169 | 
+170 |     return "\n".join(filter(None, parts))
+171 | 
+172 | 
+173 | def _extract_audio_text(audio_elem, surrounding: str) -> str:
+174 |     """audio 要素から MP3 URL を取り出し、周辺テキストと合成する。"""
+175 |     source = audio_elem.select_one("source[type='audio/mpeg']")
+176 |     if not source:
+177 |         return ""
+178 |     mp3_url = source.get("src", "").split("?")[0]  # クエリパラメータを除去
+179 |     if not mp3_url:
+180 |         return ""
+181 |     ctx = f" （周辺文脈: {surrounding[:120]}）" if surrounding else ""
+182 |     return f"[音声サンプル] MP3: {mp3_url}{ctx}"
+183 | 
+184 | 
+185 | def _find_next_page(soup: BeautifulSoup, current_url: str) -> str | None:
+186 |     """記事の次ページ URL を返す。なければ None。"""
+187 |     nav = soup.select_one("p.post-nav-links")
+188 |     if not nav:
+189 |         return None
+190 |     for a in nav.select("a.post-page-numbers"):
+191 |         href = a.get("href", "")
+192 |         # current_url の末尾ページ番号の次が対象
+193 |         if href and href != current_url:
+194 |             return href
+195 |     return None
+196 | 
+197 | 
+198 | def _clean_text(text: str) -> str:
+199 |     """空白と制御文字を正規化する。"""
+200 |     import re
+201 |     text = re.sub(r"\s+", " ", text).strip()
+202 |     return text
+203 | 
+204 | 
+205 | def _html_to_text(html: str) -> str:
+206 |     soup = BeautifulSoup(html, "html.parser")
+207 |     for tag in soup(["script", "style", "nav", "footer"]):
+208 |         tag.decompose()
+209 |     return soup.get_text(separator="\n")
+210 | 
+211 | 
+212 | # ── チャンク分割 ──────────────────────────────────────────────────────────────
+213 | 
+214 | def chunk_text(text: str) -> list[str]:
+215 |     """改行を優先しつつ、文字数ベースでオーバーラップ付きに分割する。"""
+216 |     import re
+217 |     text = re.sub(r"\n{3,}", "\n\n", text).strip()
+218 |     chunks, start = [], 0
+219 |     n = len(text)
+220 |     while start < n:
+221 |         end = min(start + config.CHUNK_CHARS, n)
+222 |         if end < n:
+223 |             window = text[start:end]
+224 |             for sep in ("\n\n", "\n", "。", ". "):
+225 |                 idx = window.rfind(sep)
+226 |                 if idx > config.CHUNK_CHARS * 0.4:
+227 |                     end = start + idx + len(sep)
+228 |                     break
+229 |         chunk = text[start:end].strip()
+230 |         if chunk:
+231 |             chunks.append(chunk)
+232 |         start = max(end - config.CHUNK_OVERLAP, end if end > start else start + 1)
+233 |     return chunks
+234 | 
+235 | 
+236 | # ── Chroma 投入 ───────────────────────────────────────────────────────────────
+237 | 
+238 | def upsert_chunks(col, source_id: str, chunks: list[str], base_meta: dict) -> int:
+239 |     """チャンクを Chroma に upsert する。投入数を返す。"""
+240 |     if not chunks:
+241 |         return 0
+242 |     ids = [f"{source_id}::{i}" for i in range(len(chunks))]
+243 |     metas = [{**base_meta, "chunk_index": i} for i in range(len(chunks))]
+244 |     col.upsert(ids=ids, documents=chunks, metadatas=metas)
+245 |     return len(chunks)
+246 | 
+247 | 
+248 | # ── メイン ────────────────────────────────────────────────────────────────────
+249 | 
+250 | def main():
+251 |     parser = argparse.ArgumentParser(description="音楽理論教材を Chroma に投入")
+252 |     parser.add_argument("--url", help="スクレイプする SoundQuest の記事URL")
+253 |     parser.add_argument("--url-file", help="URLリストファイル（1行1URL）")
+254 |     args = parser.parse_args()
+255 | 
+256 |     col = get_collection()
+257 |     total = 0
+258 | 
+259 |     # ── URL スクレイプモード ──
+260 |     if args.url or args.url_file:
+261 |         urls: list[str] = []
+262 |         if args.url:
+263 |             urls.append(args.url.strip())
+264 |         if args.url_file:
+265 |             path = Path(args.url_file)
+266 |             if not path.exists():
+267 |                 print(f"URLファイルが見つかりません: {path}")
+268 |                 sys.exit(1)
+269 |             urls += [u.strip() for u in path.read_text().splitlines() if u.strip()]
+270 | 
+271 |         for url in urls:
+272 |             print(f"\nスクレイプ: {url}")
+273 |             try:
+274 |                 entries = scrape_soundquest(url)
+275 |             except Exception as e:
+276 |                 print(f"  skip (取得失敗): {e}")
+277 |                 continue
+278 | 
+279 |             # entries をテキストに変換してチャンク化
+280 |             full_text = "\n\n".join(e["text"] for e in entries if e["text"])
+281 |             chunks = chunk_text(full_text)
+282 |             source_id = url.replace("https://", "").replace("/", "_").rstrip("_")
+283 |             n = upsert_chunks(col, source_id, chunks, {"source": url, "type": "web"})
+284 |             total += n
+285 |             print(f"  ok: {n} chunks → {url}")
+286 |             time.sleep(1.0)
+287 | 
+288 |         print(f"\n完了: 合計 {total} チャンクを投入しました。")
+289 |         print(f"コレクション '{config.COLLECTION_NAME}' の総チャンク数: {col.count()}")
+290 |         return
+291 | 
+292 |     # ── ローカルファイルモード ──
+293 |     if not config.CORPUS_DIR.exists():
+294 |         print(f"コーパスフォルダがありません: {config.CORPUS_DIR}")
+295 |         sys.exit(1)
+296 | 
+297 |     files = [p for p in config.CORPUS_DIR.rglob("*") if p.suffix.lower() in SUPPORTED]
+298 |     if not files:
+299 |         print(f"対象ファイルが見つかりません: {config.CORPUS_DIR}")
+300 |         print(f"対応形式: {', '.join(sorted(SUPPORTED))}")
+301 |         sys.exit(1)
+302 | 
+303 |     for path in files:
+304 |         rel = path.relative_to(config.CORPUS_DIR).as_posix()
+305 |         try:
+306 |             text = extract_text_file(path)
+307 |         except Exception as e:
+308 |             print(f"  skip (読み込み失敗): {rel} -> {e}")
+309 |             continue
+310 |         chunks = chunk_text(text)
+311 |         n = upsert_chunks(col, rel, chunks, {"source": rel, "type": "file"})
+312 |         total += n
+313 |         print(f"  ok: {rel}  ({n} chunks)")
+314 | 
+315 |     print(f"\n完了: {len(files)} ファイル / 合計 {total} チャンクを投入しました。")
+316 |     print(f"コレクション '{config.COLLECTION_NAME}' の総チャンク数: {col.count()}")
+317 | 
+318 | 
+319 | if __name__ == "__main__":
+320 |     main()
+321 | 
+
+
+--------------------------------------------------------------------------------
+/ingest copy.py:
+--------------------------------------------------------------------------------
+  1 | """教材コーパスを Chroma に投入するスクリプト（1回だけ実行すればよい）。
+  2 | 
+  3 | 使い方:
+  4 |     # ローカルファイル（PDF/HTML/txt/md）を data/corpus/ に置いて一括投入
+  5 |     python ingest.py
+  6 | 
+  7 |     # SoundQuest の URL を直接スクレイプして投入
+  8 |     python ingest.py --url https://soundquest.jp/quest/prerequisite/tonality/
+  9 | 
+ 10 |     # URL リストファイル（1行1URL）を一括スクレイプ
+ 11 |     python ingest.py --url-file urls.txt
+ 12 | 
+ 13 | upsert なので何度実行しても重複しない（冪等）。
+ 14 | """
+ 15 | from __future__ import annotations
+ 16 | 
+ 17 | import argparse
+ 18 | import sys
+ 19 | import time
+ 20 | from pathlib import Path
+ 21 | 
+ 22 | import fitz  # PyMuPDF
+ 23 | import requests
+ 24 | from bs4 import BeautifulSoup
+ 25 | 
+ 26 | import config
+ 27 | from retriever import get_collection
+ 28 | 
+ 29 | SUPPORTED = {".pdf", ".html", ".htm", ".txt", ".md", ".markdown"}
+ 30 | 
+ 31 | HEADERS = {
+ 32 |     "User-Agent": (
+ 33 |         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+ 34 |         "AppleWebKit/537.36 (KHTML, like Gecko) "
+ 35 |         "Chrome/124.0.0.0 Safari/537.36"
+ 36 |     )
+ 37 | }
+ 38 | 
+ 39 | 
+ 40 | # ── ローカルファイル処理 ─────────────────────────────────────────────────────
+ 41 | 
+ 42 | def extract_text_file(path: Path) -> str:
+ 43 |     """ローカルファイル形式に応じてプレーンテキストを抽出する。"""
+ 44 |     suffix = path.suffix.lower()
+ 45 |     if suffix == ".pdf":
+ 46 |         with fitz.open(path) as doc:
+ 47 |             return "\n".join(page.get_text() for page in doc)
+ 48 |     if suffix in {".html", ".htm"}:
+ 49 |         html = path.read_text(encoding="utf-8", errors="ignore")
+ 50 |         return _html_to_text(html)
+ 51 |     return path.read_text(encoding="utf-8", errors="ignore")
+ 52 | 
+ 53 | 
+ 54 | # ── SoundQuest スクレイパー ───────────────────────────────────────────────────
+ 55 | 
+ 56 | def scrape_soundquest(url: str) -> list[dict]:
+ 57 |     """SoundQuest の1記事（複数ページ対応）をスクレイプし、チャンク候補リストを返す。
+ 58 | 
+ 59 |     各エントリ:
+ 60 |       {"text": str, "type": "text"|"audio"|"image", "source_url": str}
+ 61 |     """
+ 62 |     entries: list[dict] = []
+ 63 |     current_url: str | None = url
+ 64 | 
+ 65 |     while current_url:
+ 66 |         print(f"    fetch: {current_url}")
+ 67 |         resp = requests.get(current_url, headers=HEADERS, timeout=20)
+ 68 |         resp.raise_for_status()
+ 69 |         soup = BeautifulSoup(resp.text, "html.parser")
+ 70 | 
+ 71 |         # 本文エリアを特定
+ 72 |         content = soup.select_one("div.post-content")
+ 73 |         if not content:
+ 74 |             print(f"    warn: .post-content が見つかりません ({current_url})")
+ 75 |             break
+ 76 | 
+ 77 |         # ノイズを除去
+ 78 |         for tag in content.select(
+ 79 |             "script, style, nav, .ez-toc-container, .post-tags, "
+ 80 |             ".post-nav-links, .easy-footnote"
+ 81 |         ):
+ 82 |             tag.decompose()
+ 83 | 
+ 84 |         # コンテンツをブロック単位で走査して種別付きエントリを生成
+ 85 |         entries += _parse_content_blocks(content, current_url)
+ 86 | 
+ 87 |         # 次ページリンクを探す（例: /tonality/2/）
+ 88 |         current_url = _find_next_page(soup, current_url)
+ 89 |         if current_url:
+ 90 |             time.sleep(0.5)  # サーバー負荷軽減
+ 91 | 
+ 92 |     return entries
+ 93 | 
+ 94 | 
+ 95 | def _parse_content_blocks(content, page_url: str) -> list[dict]:
+ 96 |     """本文 DOM を走査し、テキスト・音声・画像を種別付きで抽出する。"""
+ 97 |     entries: list[dict] = []
+ 98 | 
+ 99 |     for elem in content.children:
+100 |         if not hasattr(elem, "name") or not elem.name:
+101 |             continue
+102 | 
+103 |         # ── テキストブロック（p, h2-h5, dl, blockquote, ul, ol など）──
+104 |         if elem.name in {"p", "h2", "h3", "h4", "h5", "dl", "blockquote", "ul", "ol"}:
+105 |             text = _clean_text(elem.get_text(separator=" "))
+106 |             if text:
+107 |                 entries.append({"text": text, "type": "text", "source_url": page_url})
+108 | 
+109 |         # ── .image ブロック（画像 + 直後の音声プレーヤーを一体で処理）──
+110 |         elif "image" in elem.get("class", []):
+111 |             block_text = _extract_image_block(elem)
+112 |             if block_text:
+113 |                 entries.append({"text": block_text, "type": "image", "source_url": page_url})
+114 | 
+115 |         # ── 単体の audio（.image の外に置かれているもの）──
+116 |         elif elem.name == "audio" or elem.select("audio"):
+117 |             audio_text = _extract_audio_text(elem, surrounding="")
+118 |             if audio_text:
+119 |                 entries.append({"text": audio_text, "type": "audio", "source_url": page_url})
+120 | 
+121 |         # ── Spotify 埋め込み ──
+122 |         elif elem.name == "div" and "sp-playlist" in elem.get("class", []):
+123 |             iframe = elem.select_one("iframe[src*='open.spotify.com']")
+124 |             if iframe:
+125 |                 src = iframe.get("src", "")
+126 |                 entries.append({
+127 |                     "text": f"[Spotify プレイリスト埋め込み] URL: {src}",
+128 |                     "type": "text",
+129 |                     "source_url": page_url,
+130 |                 })
+131 | 
+132 |         # ── .def（用語定義ボックス）──
+133 |         elif elem.name == "dl" and "def" in elem.get("class", []):
+134 |             text = _clean_text(elem.get_text(separator=" "))
+135 |             if text:
+136 |                 entries.append({"text": f"[用語定義] {text}", "type": "text", "source_url": page_url})
+137 | 
+138 |     return entries
+139 | 
+140 | 
+141 | def _extract_image_block(elem) -> str:
+142 |     """
+143 |     .image ブロックから、画像の alt テキストと
+144 |     直後に埋め込まれた <audio> の MP3 URL を合成してテキスト化する。
+145 |     """
+146 |     parts: list[str] = []
+147 | 
+148 |     # imgcaption
+149 |     caption_el = elem.select_one(".imgcaption")
+150 |     if caption_el:
+151 |         cap = _clean_text(caption_el.get_text())
+152 |         if cap:
+153 |             parts.append(f"[図のキャプション] {cap}")
+154 | 
+155 |     # img alt
+156 |     for img in elem.select("img"):
+157 |         alt = img.get("alt", "").strip()
+158 |         src = img.get("src", "")
+159 |         if alt:
+160 |             parts.append(f"[画像の説明] {alt}")
+161 |         if src:
+162 |             parts.append(f"[画像URL] {src}")
+163 | 
+164 |     # 直後にある audio → MP3 URL + 周辺テキスト
+165 |     audio = elem.select_one("audio.wp-audio-shortcode")
+166 |     if audio:
+167 |         surrounding = " ".join(p.strip() for p in parts)
+168 |         parts.append(_extract_audio_text(audio, surrounding))
+169 | 
+170 |     return "\n".join(filter(None, parts))
+171 | 
+172 | 
+173 | def _extract_audio_text(audio_elem, surrounding: str) -> str:
+174 |     """audio 要素から MP3 URL を取り出し、周辺テキストと合成する。"""
+175 |     source = audio_elem.select_one("source[type='audio/mpeg']")
+176 |     if not source:
+177 |         return ""
+178 |     mp3_url = source.get("src", "").split("?")[0]  # クエリパラメータを除去
+179 |     if not mp3_url:
+180 |         return ""
+181 |     ctx = f" （周辺文脈: {surrounding[:120]}）" if surrounding else ""
+182 |     return f"[音声サンプル] MP3: {mp3_url}{ctx}"
+183 | 
+184 | 
+185 | def _find_next_page(soup: BeautifulSoup, current_url: str) -> str | None:
+186 |     """記事の次ページ URL を返す。なければ None。"""
+187 |     nav = soup.select_one("p.post-nav-links")
+188 |     if not nav:
+189 |         return None
+190 |     for a in nav.select("a.post-page-numbers"):
+191 |         href = a.get("href", "")
+192 |         # current_url の末尾ページ番号の次が対象
+193 |         if href and href != current_url:
+194 |             return href
+195 |     return None
+196 | 
+197 | 
+198 | def _clean_text(text: str) -> str:
+199 |     """空白と制御文字を正規化する。"""
+200 |     import re
+201 |     text = re.sub(r"\s+", " ", text).strip()
+202 |     return text
+203 | 
+204 | 
+205 | def _html_to_text(html: str) -> str:
+206 |     soup = BeautifulSoup(html, "html.parser")
+207 |     for tag in soup(["script", "style", "nav", "footer"]):
+208 |         tag.decompose()
+209 |     return soup.get_text(separator="\n")
+210 | 
+211 | 
+212 | # ── チャンク分割 ──────────────────────────────────────────────────────────────
+213 | 
+214 | def chunk_text(text: str) -> list[str]:
+215 |     """改行を優先しつつ、文字数ベースでオーバーラップ付きに分割する。"""
+216 |     import re
+217 |     text = re.sub(r"\n{3,}", "\n\n", text).strip()
+218 |     chunks, start = [], 0
+219 |     n = len(text)
+220 |     while start < n:
+221 |         end = min(start + config.CHUNK_CHARS, n)
+222 |         if end < n:
+223 |             window = text[start:end]
+224 |             for sep in ("\n\n", "\n", "。", ". "):
+225 |                 idx = window.rfind(sep)
+226 |                 if idx > config.CHUNK_CHARS * 0.4:
+227 |                     end = start + idx + len(sep)
+228 |                     break
+229 |         chunk = text[start:end].strip()
+230 |         if chunk:
+231 |             chunks.append(chunk)
+232 |         start = max(end - config.CHUNK_OVERLAP, end if end > start else start + 1)
+233 |     return chunks
+234 | 
+235 | 
+236 | # ── Chroma 投入 ───────────────────────────────────────────────────────────────
+237 | 
+238 | def upsert_chunks(col, source_id: str, chunks: list[str], base_meta: dict) -> int:
+239 |     """チャンクを Chroma に upsert する。投入数を返す。"""
+240 |     if not chunks:
+241 |         return 0
+242 |     ids = [f"{source_id}::{i}" for i in range(len(chunks))]
+243 |     metas = [{**base_meta, "chunk_index": i} for i in range(len(chunks))]
+244 |     col.upsert(ids=ids, documents=chunks, metadatas=metas)
+245 |     return len(chunks)
+246 | 
+247 | 
+248 | # ── メイン ────────────────────────────────────────────────────────────────────
+249 | 
+250 | def main():
+251 |     parser = argparse.ArgumentParser(description="音楽理論教材を Chroma に投入")
+252 |     parser.add_argument("--url", help="スクレイプする SoundQuest の記事URL")
+253 |     parser.add_argument("--url-file", help="URLリストファイル（1行1URL）")
+254 |     args = parser.parse_args()
+255 | 
+256 |     col = get_collection()
+257 |     total = 0
+258 | 
+259 |     # ── URL スクレイプモード ──
+260 |     if args.url or args.url_file:
+261 |         urls: list[str] = []
+262 |         if args.url:
+263 |             urls.append(args.url.strip())
+264 |         if args.url_file:
+265 |             path = Path(args.url_file)
+266 |             if not path.exists():
+267 |                 print(f"URLファイルが見つかりません: {path}")
+268 |                 sys.exit(1)
+269 |             urls += [u.strip() for u in path.read_text().splitlines() if u.strip()]
+270 | 
+271 |         for url in urls:
+272 |             print(f"\nスクレイプ: {url}")
+273 |             try:
+274 |                 entries = scrape_soundquest(url)
+275 |             except Exception as e:
+276 |                 print(f"  skip (取得失敗): {e}")
+277 |                 continue
+278 | 
+279 |             # entries をテキストに変換してチャンク化
+280 |             full_text = "\n\n".join(e["text"] for e in entries if e["text"])
+281 |             chunks = chunk_text(full_text)
+282 |             source_id = url.replace("https://", "").replace("/", "_").rstrip("_")
+283 |             n = upsert_chunks(col, source_id, chunks, {"source": url, "type": "web"})
+284 |             total += n
+285 |             print(f"  ok: {n} chunks → {url}")
+286 |             time.sleep(1.0)
+287 | 
+288 |         print(f"\n完了: 合計 {total} チャンクを投入しました。")
+289 |         print(f"コレクション '{config.COLLECTION_NAME}' の総チャンク数: {col.count()}")
+290 |         return
+291 | 
+292 |     # ── ローカルファイルモード ──
+293 |     if not config.CORPUS_DIR.exists():
+294 |         print(f"コーパスフォルダがありません: {config.CORPUS_DIR}")
+295 |         sys.exit(1)
+296 | 
+297 |     files = [p for p in config.CORPUS_DIR.rglob("*") if p.suffix.lower() in SUPPORTED]
+298 |     if not files:
+299 |         print(f"対象ファイルが見つかりません: {config.CORPUS_DIR}")
+300 |         print(f"対応形式: {', '.join(sorted(SUPPORTED))}")
+301 |         sys.exit(1)
+302 | 
+303 |     for path in files:
+304 |         rel = path.relative_to(config.CORPUS_DIR).as_posix()
+305 |         try:
+306 |             text = extract_text_file(path)
+307 |         except Exception as e:
+308 |             print(f"  skip (読み込み失敗): {rel} -> {e}")
+309 |             continue
+310 |         chunks = chunk_text(text)
+311 |         n = upsert_chunks(col, rel, chunks, {"source": rel, "type": "file"})
+312 |         total += n
+313 |         print(f"  ok: {rel}  ({n} chunks)")
+314 | 
+315 |     print(f"\n完了: {len(files)} ファイル / 合計 {total} チャンクを投入しました。")
+316 |     print(f"コレクション '{config.COLLECTION_NAME}' の総チャンク数: {col.count()}")
+317 | 
+318 | 
+319 | if __name__ == "__main__":
+320 |     main()
+321 | 
+
+
+--------------------------------------------------------------------------------
+Create README Badge

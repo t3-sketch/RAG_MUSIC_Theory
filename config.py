@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- パス ---
-BASE_DIR = Path(__file__).parent
+BASE_DIR = Path(__file__).resolve().parent
 CORPUS_DIR = BASE_DIR / "data" / "corpus"   # 教材（PDF/HTML/txt/md）を置く場所
 CHROMA_DIR = BASE_DIR / "data" / "chroma"   # Chroma の永続化先
 
@@ -16,8 +16,8 @@ COLLECTION_NAME = "music_theory"
 
 # --- モデル ---
 EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # --- Songle API ---
 SONGLE_API_TOKEN = os.getenv("SONGLE_API_TOKEN", "")
